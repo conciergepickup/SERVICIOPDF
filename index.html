@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ORDEN DE SERVICIOS - TRANSPORTATION</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, updateDoc, collection, addDoc, serverTimestamp, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Config
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'transporte-app';
+
+        let currentOrderData = null;
+        let isAuthenticating = false;
+
+        // CONSTANTES FIJAS DE LA EMPRESA
+        const EMPRESA_NOMBRE = "TRANSPORTATION";
+        const LINK_MERCADO_PAGO = "https://mpago.la/17cBmpk";
+
+        const initAuth = async () => {
+            if (isAuthenticating) return;
+            isAuthenticating = true;
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (e) { console.error("Error Auth:", e); }
+            finally { isAuthenticating = false; }
+        };
+
+        onAuthStateChanged(auth, async (user) => {
+            if (!user && !isAuthenticating) { await initAuth(); return; }
+            
+            const adminLoginView = document.getElementById('admin-login-view');
+            const adminDashboardView = document.getElementById('admin-dashboard-view');
+
+            if (user && !user.isAnonymous) {
+                adminLoginView.classList.add('hidden');
+                adminDashboardView.classList.remove('hidden');
+                window.cargarPendientes();
+            } else {
+                adminLoginView.classList.remove('hidden');
+                adminDashboardView.classList.add('hidden');
+            }
+        });
+
+        window.switchTab = (tab) => {
+            const userView = document.getElementById('view-user');
+            const adminView = document.getElementById('view-admin');
+            const btnUser = document.getElementById('tab-btn-user');
+            const btnAdmin = document.getElementById('tab-btn-admin');
+            if (tab === 'user') {
+                userView.classList.remove('hidden'); adminView.classList.add('hidden');
+                btnUser.classList.add('bg-sky-600', 'text-white'); btnAdmin.classList.remove('bg-sky-600', 'text-white');
+            } else {
+                userView.classList.add('hidden'); adminView.classList.remove('hidden');
+                btnAdmin.classList.add('bg-sky-600', 'text-white'); btnUser.classList.remove('bg-sky-600', 'text-white');
+            }
+        };
+
+        window.loginAdmin = async () => {
+            const email = document.getElementById('admin-email').value.trim();
+            const pass = document.getElementById('admin-pass').value.trim();
+            const btn = document.getElementById('btn-login-admin');
+            if(!email || !pass) return;
+            btn.innerText = "ACCEDIENDO..."; btn.disabled = true;
+            try { 
+                await signInWithEmailAndPassword(auth, email, pass); 
+            } catch (e) {
+                // Credenciales específicas solicitadas
+                if (email === "mayatraintransport@gmail.com" && pass === "Tour03048") {
+                    await createUserWithEmailAndPassword(auth, email, pass).catch(alert);
+                } else { 
+                    alert("Credenciales incorrectas."); 
+                }
+            } finally { btn.innerText = "ENTRAR"; btn.disabled = false; }
+        };
+
+        window.logout = async () => { await signOut(auth); window.location.reload(); };
+
+        window.cargarPendientes = () => {
+            if (!auth.currentUser) return;
+            const listEl = document.getElementById('admin-list');
+            const colRef = collection(db, 'artifacts', appId, 'public', 'data', 'ordenes');
+            onSnapshot(colRef, (snap) => {
+                listEl.innerHTML = "";
+                let count = 0;
+                snap.forEach(d => {
+                    const order = d.data();
+                    if(order.status === "pendiente") {
+                        count++;
+                        const div = document.createElement('div');
+                        div.className = "bg-white border-2 border-slate-100 rounded-3xl p-6 flex justify-between items-center shadow-sm";
+                        div.innerHTML = `
+                            <div>
+                                <span class="text-[10px] font-black text-sky-600 uppercase">${order.orderID}</span>
+                                <h4 class="font-black text-slate-900 uppercase text-lg">${order.nombre}</h4>
+                                <p class="text-[11px] text-slate-400 font-bold uppercase">${order.origen} a ${order.destino}</p>
+                            </div>
+                            <button onclick="window.aprobarOrden('${d.id}', this)" class="bg-slate-900 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase">Validar</button>
+                        `;
+                        listEl.appendChild(div);
+                    }
+                });
+                if(count === 0) listEl.innerHTML = '<p class="text-center py-10 text-slate-300 font-black uppercase text-sm">Sin órdenes pendientes</p>';
+            }, (err) => console.error("Error Firestore:", err));
+        };
+
+        window.aprobarOrden = async (id, btn) => {
+            btn.innerText = "?";
+            try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ordenes', id), { status: "aprobado" }); }
+            catch (e) { alert("Error al validar la orden."); }
+        };
+
+        document.getElementById('transportForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('submit-btn');
+            
+            // 1. Abrir link de pago en pestaña nueva
+            window.open(LINK_MERCADO_PAGO, '_blank');
+
+            // 2. Registrar en la base de datos
+            btn.innerText = "ENVIANDO..."; btn.disabled = true;
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData.entries());
+            const orderId = "TR-" + Math.random().toString(36).substr(2, 4).toUpperCase();
+            
+            try {
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ordenes'), {
+                    ...data, 
+                    orderID: orderId, 
+                    status: "pendiente", 
+                    timestamp: serverTimestamp()
+                });
+                
+                document.getElementById('form-container').classList.add('hidden');
+                document.getElementById('waiting-panel').classList.remove('hidden');
+                document.getElementById('wait-order-id').innerText = orderId;
+                
+                const q = collection(db, 'artifacts', appId, 'public', 'data', 'ordenes');
+                const unsub = onSnapshot(q, (snap) => {
+                    snap.forEach(doc => {
+                        const d = doc.data();
+                        if(d.orderID === orderId && d.status === 'aprobado') { 
+                            unsub(); 
+                            window.mostrarVoucherFinal(d); 
+                        }
+                    });
+                }, (err) => console.error(err));
+            } catch (err) { 
+                alert("Error al procesar la solicitud."); 
+                btn.disabled = false; 
+                btn.innerText = "Solicitar Autorización";
+            }
+        });
+
+        window.mostrarVoucherFinal = (data) => {
+            currentOrderData = data;
+            document.getElementById('waiting-panel').classList.add('hidden');
+            document.getElementById('success-panel').classList.remove('hidden');
+            
+            document.getElementById('v-folio').innerText = data.orderID;
+            document.getElementById('v-nombre').innerText = data.nombre;
+            document.getElementById('v-empresa-val').innerText = data.empresa;
+            document.getElementById('v-fecha').innerText = data.fecha.replace('T', ' ');
+            document.getElementById('v-ruta').innerText = `${data.origen} ? ${data.destino}`;
+            document.getElementById('v-unidad-val').innerText = `${data.tipo_unidad} - ${data.color_unidad}`;
+            document.getElementById('v-chofer').innerText = data.conductor;
+            document.getElementById('v-placas').innerText = data.placas;
+            document.getElementById('v-monto-val').innerText = "$" + data.balance;
+        };
+
+        window.descargarPDF = () => {
+            const element = document.getElementById('voucher-printable');
+            if (!currentOrderData) return;
+            const opt = {
+                margin: 0,
+                filename: `Voucher_${currentOrderData.orderID}.pdf`,
+                image: { type: 'jpeg', quality: 1.0 },
+                html2canvas: { scale: 3, useCORS: true },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+            };
+            html2pdf().set(opt).from(element).save();
+        };
+
+        window.compartirWhatsApp = () => {
+            const d = currentOrderData;
+            const texto = `*ORDEN DE SERVICIO: ${d.orderID}*%0A*Pasajero:* ${d.nombre}%0A*Ruta:* ${d.origen} a ${d.destino}%0A*Total:* $${d.balance}%0A*Voucher Autorizado por TRANSPORTATION*`;
+            window.open(`https://wa.me/?text=${texto}`, '_blank');
+        };
+
+        window.onload = () => {
+            initAuth();
+            const now = new Date();
+            now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+            const di = document.querySelector('input[name="fecha"]');
+            if(di) di.value = now.toISOString().slice(0, 16);
+        };
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f8fafc; }
+        
+        .input-field { 
+            border: 2px solid #e2e8f0; 
+            border-radius: 1.25rem; 
+            padding: 1.25rem; 
+            font-weight: 700; 
+            width: 100%; 
+            background: #fff; 
+            font-size: 1.1rem;
+            color: #0f172a;
+        }
+        .input-field:focus { border-color: #0ea5e9; outline: none; box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.1); }
+        label {
+            font-size: 0.85rem;
+            font-weight: 800;
+            color: #64748b;
+            text-transform: uppercase;
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+        .btn-primary {
+            background-color: #0f172a;
+            color: white;
+            font-weight: 900;
+            padding: 1.5rem;
+            border-radius: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-size: 1.1rem;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .btn-primary:active { transform: scale(0.98); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        #voucher-printable {
+            background: white !important;
+            width: 210mm;
+            min-height: 297mm;
+            margin: 0 auto;
+        }
+    </style>
+</head>
+<body class="pb-20">
+
+    <header class="bg-white border-b border-slate-100 p-4 sticky top-0 z-50">
+        <div class="max-w-xl mx-auto flex flex-col gap-4">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                    <div class="w-10 h-10 bg-sky-600 rounded-xl flex items-center justify-center text-white font-black text-xl">T</div>
+                    <span class="font-black text-slate-800 uppercase text-sm tracking-tight">TRANSPORTATION</span>
+                </div>
+            </div>
+            <div class="flex bg-slate-100 p-1.5 rounded-2xl">
+                <button id="tab-btn-user" onclick="switchTab('user')" class="flex-1 py-3 rounded-xl font-black text-xs uppercase bg-sky-600 text-white shadow-lg">?? Usuario</button>
+                <button id="tab-btn-admin" onclick="switchTab('admin')" class="flex-1 py-3 rounded-xl font-black text-xs uppercase text-slate-400">?? Gerencia</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- VISTA USUARIO -->
+    <main id="view-user" class="max-w-2xl mx-auto mt-8 px-4">
+        <div class="bg-white rounded-[3rem] shadow-2xl border border-slate-100 overflow-hidden">
+            
+            <div id="form-container">
+                <div class="bg-slate-900 p-10 text-center">
+                    <div class="w-20 h-20 bg-white/10 rounded-2xl mx-auto mb-4 flex items-center justify-center border border-white/20">
+                        <span class="text-4xl">??</span>
+                    </div>
+                    <h1 class="text-white font-black uppercase text-xl tracking-widest mb-1">TRANSPORTATION</h1>
+                    <p class="text-sky-400 font-bold text-[10px] uppercase tracking-widest">Orden de Servicio & Pago</p>
+                </div>
+                
+                <form id="transportForm" class="p-8 space-y-6">
+                    <div class="grid grid-cols-1 gap-6">
+                        <div><label>Empresa Solicitante</label><input type="text" name="empresa" required placeholder="Nombre de la agencia" class="input-field"></div>
+                        <div><label>Pasajero Principal</label><input type="text" name="nombre" required placeholder="Nombre completo" class="input-field"></div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-6">
+                        <div><label>Tipo de Unidad</label>
+                            <select name="tipo_unidad" required class="input-field">
+                                <option value="Van">Van Estándar</option>
+                                <option value="Sedán">Sedán Privado</option>
+                                <option value="SUV">SUV Premium</option>
+                                <option value="Sprinter">Sprinter</option>
+                            </select>
+                        </div>
+                        <div><label>Color</label><input type="text" name="color_unidad" required placeholder="Color" class="input-field uppercase"></div>
+                    </div>
+
+                    <div><label>Fecha y Hora de Servicio</label><input type="datetime-local" name="fecha" required class="input-field"></div>
+
+                    <div class="grid grid-cols-2 gap-6">
+                        <div><label>Pick-up (Origen)</label><input type="text" name="origen" required placeholder="Lugar origen" class="input-field uppercase"></div>
+                        <div><label>Drop-off (Destino)</label><input type="text" name="destino" required placeholder="Lugar destino" class="input-field uppercase"></div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-6">
+                        <div><label>Conductor Asignado</label><input type="text" name="conductor" required placeholder="Nombre chofer" class="input-field"></div>
+                        <div><label>Matrícula / Placas</label><input type="text" name="placas" required placeholder="Placas" class="input-field uppercase"></div>
+                    </div>
+
+                    <div class="pt-4 border-t border-slate-100">
+                        <label class="text-center w-full">Importe Total a Pagar ($)</label>
+                        <input type="number" step="0.01" name="balance" required placeholder="0.00" class="input-field text-4xl text-sky-600 bg-sky-50 border-none text-center h-24 font-black">
+                    </div>
+
+                    <div class="bg-blue-50 p-5 rounded-2xl border border-blue-100 flex gap-4 items-center">
+                        <span class="text-2xl">??</span>
+                        <p class="text-[11px] font-bold text-blue-900 uppercase leading-tight">Será redirigido a Mercado Pago. Su orden se validará automáticamente al confirmar el pago con gerencia.</p>
+                    </div>
+
+                    <button type="submit" id="submit-btn" class="w-full btn-primary mt-4">Pagar y Solicitar Voucher</button>
+                </form>
+            </div>
+
+            <!-- ESPERA -->
+            <div id="waiting-panel" class="hidden py-32 px-10 text-center">
+                <div class="w-20 h-20 border-[8px] border-sky-500 border-t-transparent rounded-full animate-spin mx-auto mb-8"></div>
+                <h2 class="font-black text-2xl text-slate-800 uppercase">Solicitud en Revisión</h2>
+                <p class="text-slate-400 font-bold mt-2 uppercase text-[10px] tracking-widest">Mantenga esta ventana abierta. Una vez verificado el pago, su voucher aparecerá aquí.</p>
+                <div class="mt-10 bg-slate-50 py-3 rounded-2xl inline-block px-8 border border-slate-100">
+                    <p class="text-[9px] font-black text-slate-400 uppercase mb-1">Folio de Referencia</p>
+                    <span id="wait-order-id" class="text-lg font-black text-sky-600 tracking-widest"></span>
+                </div>
+            </div>
+
+            <!-- VOUCHER ÉXITO -->
+            <div id="success-panel" class="hidden p-6 bg-slate-50 min-h-screen">
+                <div class="max-w-xl mx-auto space-y-3 mb-8">
+                    <div class="text-center mb-6">
+                        <div class="w-14 h-14 bg-emerald-500 text-white rounded-full flex items-center justify-center text-2xl mx-auto mb-3 shadow-lg">?</div>
+                        <h2 class="font-black text-xl text-slate-900 uppercase">Voucher Autorizado</h2>
+                    </div>
+                    <button onclick="descargarPDF()" class="w-full bg-slate-900 text-white py-4 rounded-xl font-black uppercase text-xs">Descargar PDF</button>
+                    <button onclick="compartirWhatsApp()" class="w-full bg-emerald-500 text-white py-4 rounded-xl font-black uppercase text-xs">Compartir WhatsApp</button>
+                </div>
+
+                <div id="voucher-printable" class="bg-white overflow-hidden shadow-xl border border-slate-100">
+                    <div class="bg-slate-900 p-10 flex justify-between items-center text-white">
+                        <div>
+                            <h3 class="font-black text-lg uppercase tracking-widest">TRANSPORTATION</h3>
+                            <p class="text-[9px] text-sky-400 font-black uppercase">Orden de Servicio Validada</p>
+                        </div>
+                        <div class="text-right">
+                            <p id="v-folio" class="font-black text-3xl text-white tracking-tighter"></p>
+                        </div>
+                    </div>
+                    <div class="p-10 space-y-8">
+                        <div class="grid grid-cols-2 gap-8">
+                            <div><label>Pasajero</label><p id="v-nombre" class="font-black text-lg text-slate-900 uppercase"></p></div>
+                            <div><label>Agencia / Cliente</label><p id="v-empresa-val" class="font-black text-lg text-slate-900 uppercase"></p></div>
+                        </div>
+                        <div class="border-t border-slate-100 pt-6">
+                            <label>Ruta de Traslado</label>
+                            <p id="v-ruta" class="font-black text-2xl text-slate-900 uppercase leading-none"></p>
+                        </div>
+                        <div class="grid grid-cols-2 gap-8 pt-4">
+                            <div><label>Vehículo</label><p id="v-unidad-val" class="font-bold text-slate-800 uppercase"></p></div>
+                            <div><label>Fecha y Hora</label><p id="v-fecha" class="font-bold text-slate-800"></p></div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-8">
+                            <div><label>Operador</label><p id="v-chofer" class="font-bold text-slate-800 uppercase"></p></div>
+                            <div><label>Placas</label><p id="v-placas" class="font-bold text-slate-800 uppercase"></p></div>
+                        </div>
+                        <div class="bg-slate-900 p-6 rounded-2xl flex justify-between items-center text-white">
+                            <span class="text-[10px] font-black uppercase text-slate-400">Total Liquidado</span>
+                            <span id="v-monto-val" class="text-3xl font-black text-sky-400"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="text-center py-8">
+                    <button onclick="window.location.reload()" class="text-slate-400 font-black uppercase text-[10px] underline">Nueva Solicitud</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- VISTA GERENCIA -->
+    <main id="view-admin" class="hidden max-w-xl mx-auto mt-8 px-4">
+        <div id="admin-login-view" class="bg-white rounded-[2rem] shadow-xl p-10 border border-slate-100">
+            <h2 class="font-black text-center text-2xl mb-8 uppercase text-slate-900 tracking-tighter">Panel de Gerencia</h2>
+            <div class="space-y-4">
+                <input type="email" id="admin-email" placeholder="Usuario (Email)" class="input-field !p-4 !text-base">
+                <input type="password" id="admin-pass" placeholder="Contraseña" class="input-field !p-4 !text-base">
+                <button id="btn-login-admin" onclick="loginAdmin()" class="w-full btn-primary !p-4 !text-sm">Iniciar Sesión</button>
+            </div>
+        </div>
+        <div id="admin-dashboard-view" class="hidden space-y-4">
+            <div class="flex justify-between items-center bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+                <h2 class="font-black text-slate-800 uppercase text-xs">Órdenes por Validar</h2>
+                <button onclick="logout()" class="text-[10px] font-black text-red-500 uppercase bg-red-50 px-3 py-2 rounded-lg">Cerrar Sesión</button>
+            </div>
+            <div id="admin-list" class="space-y-3">
+                <!-- Se llena vía JS -->
+            </div>
+        </div>
+    </main>
+
+</body>
+</html>
